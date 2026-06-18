@@ -12,7 +12,8 @@ type ConfigItem = {
 type SkillItem = {
   id: string
   name: string
-  tag: string
+  directoryHandle: DirectoryHandle
+  content: string
 }
 
 type DirectoryHandle = {
@@ -50,23 +51,16 @@ const HANDLE_DB_NAME = 'codex-workbench'
 const HANDLE_STORE_NAME = 'handles'
 const HANDLE_KEY = 'codex-directory'
 
-const skills: SkillItem[] = [
-  { id: 'repo-analyze', name: 'repo-analyze', tag: '代码分析' },
-  { id: 'code-review', name: 'code-review', tag: '代码评审' },
-  { id: 'refactor', name: 'refactor', tag: '代码重构' },
-  { id: 'bugfix', name: 'bugfix', tag: '调试修复' },
-  { id: 'test-gen', name: 'test-gen', tag: '测试' },
-  { id: 'doc-gen', name: 'doc-gen', tag: '文档' },
-  { id: 'deploy-check', name: 'deploy-check', tag: '部署检查' },
-  { id: 'prompt-debug', name: 'prompt-debug', tag: '调试辅助' },
-]
-
 const codexDirHandle = shallowRef<DirectoryHandle | null>(null)
+const skillsDirHandle = shallowRef<DirectoryHandle | null>(null)
 const configs = ref<ConfigItem[]>([])
+const skillItems = ref<SkillItem[]>([])
 const currentConfigId = ref('')
 const selectedConfigId = ref('')
 const configStatus = ref('等待授权读取 Codex 配置目录')
 const configError = ref('')
+const skillStatus = ref('等待授权读取 Codex Skills 目录')
+const skillError = ref('')
 const scanDebug = ref({
   auth: [] as string[],
   config: [] as string[],
@@ -74,8 +68,12 @@ const scanDebug = ref({
 })
 const isLoadingConfigs = ref(false)
 const isSwitchingConfig = ref(false)
+const isLoadingSkills = ref(false)
 const skillKeyword = ref('')
-const activeSkillId = ref('repo-analyze')
+const activeSkillId = ref('')
+const selectedSkill = ref<SkillItem | null>(null)
+const copyStatus = ref('')
+let copyStatusTimer: number | undefined
 
 const defaultCodexPath = computed(() => {
   const platform = window.navigator.platform.toLowerCase()
@@ -86,6 +84,17 @@ const defaultCodexPath = computed(() => {
   }
 
   return '~/.codex/'
+})
+
+const defaultSkillsPath = computed(() => {
+  const platform = window.navigator.platform.toLowerCase()
+  const userAgent = window.navigator.userAgent.toLowerCase()
+
+  if (platform.includes('win') || userAgent.includes('windows')) {
+    return '%USERPROFILE%\\.codex\\skills\\'
+  }
+
+  return '~/.codex/skills/'
 })
 
 const selectedConfig = computed(() => {
@@ -104,11 +113,11 @@ const filteredSkills = computed(() => {
   const keyword = skillKeyword.value.trim().toLowerCase()
 
   if (!keyword) {
-    return skills
+    return skillItems.value
   }
 
-  return skills.filter((item) => {
-    return item.name.toLowerCase().includes(keyword) || item.tag.includes(skillKeyword.value.trim())
+    return skillItems.value.filter((item) => {
+    return item.name.toLowerCase().includes(keyword)
   })
 })
 
@@ -149,6 +158,7 @@ const authorizeCodexDirectory = async () => {
     codexDirHandle.value = await resolveCodexDirectory(handle)
     configStatus.value = `已授权：${codexDirHandle.value.name || defaultCodexPath.value}`
     await scanConfigBackups()
+    await scanSkills()
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       configStatus.value = '已取消目录授权'
@@ -168,6 +178,18 @@ const resolveCodexDirectory = async (handle: DirectoryHandle) => {
     return await handle.getDirectoryHandle('.codex')
   } catch {
     return handle
+  }
+}
+
+const resolveSkillsDirectory = async () => {
+  if (!codexDirHandle.value?.getDirectoryHandle) {
+    return null
+  }
+
+  try {
+    return await codexDirHandle.value.getDirectoryHandle('skills')
+  } catch {
+    return null
   }
 }
 
@@ -278,6 +300,98 @@ const scanConfigBackups = async () => {
     configError.value = getErrorMessage(error)
   } finally {
     isLoadingConfigs.value = false
+  }
+}
+
+const scanSkills = async () => {
+  skillError.value = ''
+  isLoadingSkills.value = true
+
+  try {
+    skillsDirHandle.value = await resolveSkillsDirectory()
+
+    if (!skillsDirHandle.value) {
+      skillItems.value = []
+      skillStatus.value = `未找到 Skills 目录：${defaultSkillsPath.value}`
+      return
+    }
+
+    const nextSkills: SkillItem[] = []
+
+    for await (const [name, handle] of skillsDirHandle.value.entries()) {
+      if (handle.kind !== 'directory') {
+        continue
+      }
+
+      const directoryHandle = handle as unknown as DirectoryHandle
+
+      try {
+        const skillFileHandle = await directoryHandle.getFileHandle('SKILL.md')
+        const skillFile = await skillFileHandle.getFile()
+        const content = await skillFile.text()
+
+        nextSkills.push({
+          id: name,
+          name,
+          directoryHandle,
+          content,
+        })
+      } catch {
+        // 只有包含 SKILL.md 的文件夹才算 skill
+      }
+    }
+
+    skillItems.value = nextSkills.sort((first, second) => first.name.localeCompare(second.name))
+
+    if (!skillItems.value.some((item) => item.id === activeSkillId.value)) {
+      activeSkillId.value = skillItems.value[0]?.id ?? ''
+    }
+
+    skillStatus.value = skillItems.value.length
+      ? `已发现 ${skillItems.value.length} 个 skills`
+      : '未发现包含 SKILL.md 的 skills 文件夹'
+  } catch (error) {
+    skillError.value = getErrorMessage(error)
+  } finally {
+    isLoadingSkills.value = false
+  }
+}
+
+const openSkillModal = (skill: SkillItem) => {
+  activeSkillId.value = skill.id
+  selectedSkill.value = skill
+}
+
+const closeSkillModal = () => {
+  selectedSkill.value = null
+  copyStatus.value = ''
+}
+
+const copySelectedSkillContent = async () => {
+  if (!selectedSkill.value) {
+    return
+  }
+
+  const text = selectedSkill.value.content
+
+  try {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error('当前浏览器不支持复制')
+    }
+
+    await navigator.clipboard.writeText(text)
+    copyStatus.value = '已复制'
+
+    if (copyStatusTimer) {
+      window.clearTimeout(copyStatusTimer)
+    }
+
+    copyStatusTimer = window.setTimeout(() => {
+      copyStatus.value = ''
+    }, 1500)
+  } catch (error) {
+    copyStatus.value = ''
+    skillError.value = getErrorMessage(error)
   }
 }
 
@@ -454,9 +568,18 @@ const restorePersistedCodexDirectory = async () => {
     codexDirHandle.value = await resolveCodexDirectory(handle)
     configStatus.value = `已恢复授权：${codexDirHandle.value.name || defaultCodexPath.value}`
     await scanConfigBackups()
+    await scanSkills()
   } catch {
     // 保持静默，页面会回退到授权入口
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (copyStatusTimer) {
+      window.clearTimeout(copyStatusTimer)
+    }
+  })
 }
 </script>
 
@@ -587,27 +710,64 @@ const restorePersistedCodexDirectory = async () => {
             <span>X</span>
           </div>
 
-          <div class="skill-list">
+          <div v-if="!codexDirHandle" class="permission-panel permission-panel--cyan">
+            <p>{{ skillStatus }}</p>
+            <button type="button" class="terminal-action terminal-action--cyan" @click="authorizeCodexDirectory">
+              授权 .codex 目录
+            </button>
+          </div>
+
+          <div v-else class="skill-list">
             <button
               v-for="skill in filteredSkills"
               :key="skill.id"
               type="button"
               class="skill-row"
               :class="{ 'skill-row--active': skill.id === activeSkillId }"
-              @click="activeSkillId = skill.id"
+              @click="openSkillModal(skill)"
             >
               <div class="skill-row__meta">
                 <span class="skill-row__bullet"></span>
                 <span class="skill-row__name">{{ skill.name }}</span>
               </div>
-              <span class="skill-row__tag">{{ skill.tag }}</span>
             </button>
 
-            <p v-if="!filteredSkills.length" class="skill-list__empty">未找到匹配的 skills。</p>
+            <p v-if="!filteredSkills.length && !isLoadingSkills" class="skill-list__empty">
+              {{ skillError || skillStatus || '未找到匹配的 skills。' }}
+            </p>
           </div>
         </section>
       </div>
     </section>
+
+    <Teleport to="body">
+      <div v-if="selectedSkill" class="skill-modal" @click.self="closeSkillModal">
+        <section class="skill-modal__panel" role="dialog" aria-modal="true">
+          <header class="skill-modal__header">
+            <div>
+              <p class="skill-modal__eyebrow">SKILL.md</p>
+              <h3>{{ selectedSkill.name }}</h3>
+            </div>
+            <div class="skill-modal__actions">
+              <span v-if="copyStatus" class="skill-modal__copied">{{ copyStatus }}</span>
+              <button
+                type="button"
+                class="skill-modal__copy"
+                aria-label="复制 Skill 内容"
+                @click="copySelectedSkillContent"
+              >
+                复制
+              </button>
+              <button type="button" class="skill-modal__close" aria-label="关闭 Skill 内容" @click="closeSkillModal">
+                X
+              </button>
+            </div>
+          </header>
+
+          <pre class="skill-modal__content">{{ selectedSkill.content }}</pre>
+        </section>
+      </div>
+    </Teleport>
   </main>
 </template>
 
@@ -1006,6 +1166,17 @@ const restorePersistedCodexDirectory = async () => {
   font: inherit;
 }
 
+.permission-panel--cyan {
+  border-color: rgba(36, 231, 255, 0.28);
+  color: rgba(219, 254, 255, 0.78);
+}
+
+.terminal-action--cyan {
+  border-color: rgba(36, 231, 255, 0.48);
+  background: rgba(8, 72, 86, 0.5);
+  color: #24eaff;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -1061,13 +1232,11 @@ const restorePersistedCodexDirectory = async () => {
   box-shadow: 0 0 16px rgba(34, 232, 255, 0.7);
 }
 
-.panel--cyan .skill-row__name,
-.panel--cyan .skill-row__tag {
+.panel--cyan .skill-row__name {
   color: #dcfcff;
 }
 
-.panel--cyan .skill-row--active .skill-row__name,
-.panel--cyan .skill-row--active .skill-row__tag {
+.panel--cyan .skill-row--active .skill-row__name {
   color: #24eaff;
 }
 
@@ -1101,6 +1270,116 @@ const restorePersistedCodexDirectory = async () => {
 .switch-button:disabled {
   cursor: not-allowed;
   opacity: 0.42;
+}
+
+.skill-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.82)),
+    repeating-linear-gradient(
+      0deg,
+      rgba(36, 231, 255, 0.04) 0 1px,
+      transparent 1px 12px
+    );
+}
+
+.skill-modal__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(58rem, 92vw);
+  max-height: min(42rem, 86vh);
+  border: 1px solid rgba(36, 231, 255, 0.58);
+  border-radius: 0.9rem;
+  background:
+    linear-gradient(180deg, rgba(3, 18, 22, 0.98), rgba(1, 7, 10, 0.98)),
+    #02080a;
+  box-shadow:
+    0 0 0 1px rgba(36, 231, 255, 0.12) inset,
+    0 1.5rem 4rem rgba(0, 0, 0, 0.58),
+    0 0 2.5rem rgba(36, 231, 255, 0.16);
+  overflow: hidden;
+}
+
+.skill-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid rgba(36, 231, 255, 0.22);
+}
+
+.skill-modal__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.skill-modal__eyebrow {
+  margin: 0 0 0.2rem;
+  color: rgba(36, 231, 255, 0.62);
+  font-size: 0.68rem;
+  letter-spacing: 0.22em;
+}
+
+.skill-modal__header h3 {
+  margin: 0;
+  color: #24eaff;
+  font-size: 1.25rem;
+}
+
+.skill-modal__close {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 1px solid rgba(36, 231, 255, 0.6);
+  border-radius: 0.55rem;
+  background: rgba(8, 72, 86, 0.35);
+  color: #24eaff;
+  font: inherit;
+}
+
+.skill-modal__copy {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid rgba(36, 231, 255, 0.6);
+  border-radius: 0.55rem;
+  background: rgba(8, 72, 86, 0.35);
+  color: #24eaff;
+  font: inherit;
+}
+
+.skill-modal__copied {
+  color: #67ff94;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+}
+
+.skill-modal__content {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 1.1rem;
+  overflow: auto;
+  color: rgba(232, 255, 255, 0.9);
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.skill-modal__content::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+.skill-modal__content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(36, 231, 255, 0.32);
 }
 
 @media (max-width: 1200px) {
