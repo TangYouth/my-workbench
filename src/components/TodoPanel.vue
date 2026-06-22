@@ -10,6 +10,7 @@ type TaskItem = {
   title: string
   status: TaskStatus
   priority: TaskPriority
+  createdAt: number
   completedAt?: number
 }
 
@@ -44,6 +45,17 @@ const completionPercent = computed(() => {
 const selectedTask = computed(() => {
   return tasks.value.find((task) => task.id === selectedTaskId.value) ?? tasks.value[0] ?? null
 })
+
+const formatDateTime = (timestamp: number) => {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(timestamp)
+}
 
 const filteredTasks = computed(() => {
   if (activeFilter.value === 'active') {
@@ -80,6 +92,7 @@ const addTask = () => {
     title,
     status: 'active',
     priority: 'MEDIUM',
+    createdAt: Date.now(),
   }
 
   tasks.value.unshift(task)
@@ -130,7 +143,7 @@ const loadTasks = () => {
       return
     }
 
-    tasks.value = removeExpiredCompletedTasks(parsedTasks.filter(isValidTask))
+    tasks.value = removeExpiredCompletedTasks(parsedTasks.filter(isValidTask).map(normalizeTask))
     selectedTaskId.value = tasks.value[0]?.id ?? 0
     nextTaskId = Math.max(0, ...tasks.value.map((task) => task.id)) + 1
   } catch {
@@ -164,6 +177,11 @@ const isValidTask = (value: unknown): value is TaskItem => {
     (task.priority === 'HIGH' || task.priority === 'MEDIUM' || task.priority === 'LOW')
   )
 }
+
+const normalizeTask = (task: TaskItem) => ({
+  ...task,
+  createdAt: typeof task.createdAt === 'number' ? task.createdAt : Date.now(),
+})
 
 watch(
   tasks,
@@ -329,6 +347,14 @@ onMounted(() => {
             >
               {{ selectedTask.priority }}
             </strong>
+          </div>
+          <div>
+            <span>创建时间</span>
+            <strong>{{ formatDateTime(selectedTask.createdAt) }}</strong>
+          </div>
+          <div v-if="selectedTask.status === 'done' && selectedTask.completedAt">
+            <span>完成时间</span>
+            <strong>{{ formatDateTime(selectedTask.completedAt) }}</strong>
           </div>
         </div>
 
