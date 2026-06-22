@@ -2,10 +2,16 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import WorkbenchCenter from './components/WorkbenchCenter.vue'
 
-const navItems = [{ id: 'codex', label: 'Codex', icon: '>_' }]
+type ChannelId = 'codex' | 'todo'
+
+const navItems: { id: ChannelId; label: string; icon: string }[] = [
+  { id: 'codex', label: 'Codex', icon: '>_' },
+  { id: 'todo', label: 'Todo', icon: '>_' },
+]
 
 const now = ref(new Date())
 const onlineVisible = ref(true)
+const activeChannel = ref<ChannelId>('todo')
 let clockTimer: number | undefined
 let blinkTimer: number | undefined
 let blinkResetTimer: number | undefined
@@ -79,7 +85,9 @@ onBeforeUnmount(() => {
             v-for="item in navItems"
             :key="item.id"
             type="button"
-            class="terminal-nav terminal-nav--active"
+            class="terminal-nav"
+            :class="{ 'terminal-nav--active': activeChannel === item.id }"
+            @click="activeChannel = item.id"
           >
             <span class="terminal-nav__icon">{{ item.icon }}</span>
             <span>{{ item.label }}</span>
@@ -87,7 +95,7 @@ onBeforeUnmount(() => {
         </div>
       </aside>
 
-      <WorkbenchCenter />
+      <WorkbenchCenter :active-panel="activeChannel" />
     </div>
   </div>
 </template>
@@ -148,7 +156,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 1.5rem;
-  padding: 1rem 1.75rem 0.9rem;
+  padding: 0.65rem 1.75rem 0.55rem;
   border-bottom: 1px solid rgba(109, 255, 154, 0.16);
 }
 
@@ -161,27 +169,27 @@ onBeforeUnmount(() => {
 .brand-block__icon {
   display: grid;
   place-items: center;
-  width: 2.8rem;
-  height: 2.8rem;
+  width: 2.3rem;
+  height: 2.3rem;
   border: 1px solid rgba(33, 255, 118, 0.7);
-  border-radius: 0.8rem;
+  border-radius: 0.65rem;
   color: #46ff83;
-  font-size: 1.3rem;
+  font-size: 1.05rem;
   box-shadow:
     0 0 0 1px rgba(13, 70, 29, 0.85) inset,
     0 0 24px rgba(38, 255, 121, 0.18);
 }
 
 .brand-block__eyebrow {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.15rem;
   color: rgba(115, 255, 167, 0.6);
-  font-size: 0.75rem;
+  font-size: 0.66rem;
   letter-spacing: 0.24em;
 }
 
 .brand-block__title {
   color: #37ff74;
-  font-size: clamp(1.8rem, 2.6vw, 2.7rem);
+  font-size: clamp(1.45rem, 2.15vw, 2.25rem);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-shadow: 0 0 18px rgba(55, 255, 116, 0.22);
@@ -223,7 +231,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 1.5rem;
-  padding: 1.5rem 1.75rem 1.6rem;
+  padding: 1.1rem 1.75rem 1.35rem;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -257,6 +265,7 @@ onBeforeUnmount(() => {
   gap: 0.9rem;
   width: 100%;
   padding: 1.15rem 1rem;
+  margin-bottom: 0.85rem;
   border: 1px solid rgba(39, 255, 104, 0.16);
   border-radius: 0.85rem;
   background: transparent;
@@ -279,10 +288,17 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1080px) {
+  .workbench-shell {
+    height: auto;
+    min-height: 100svh;
+    overflow: auto;
+  }
+
   .workbench-body {
     grid-template-columns: 1fr;
     min-height: auto;
     height: auto;
+    overflow: visible;
   }
 
   .terminal-sidebar__frame {
