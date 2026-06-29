@@ -46,6 +46,16 @@ const selectedTask = computed(() => {
   return tasks.value.find((task) => task.id === selectedTaskId.value) ?? tasks.value[0] ?? null
 })
 
+const sortDoneTasksLast = (items: TaskItem[]) => {
+  return [...items].sort((left, right) => {
+    if (left.status === right.status) {
+      return 0
+    }
+
+    return left.status === 'done' ? 1 : -1
+  })
+}
+
 const formatDateTime = (timestamp: number) => {
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric',
@@ -67,10 +77,10 @@ const filteredTasks = computed(() => {
   }
 
   if (activeFilter.value === 'high') {
-    return tasks.value.filter((task) => task.priority === 'HIGH')
+    return sortDoneTasksLast(tasks.value.filter((task) => task.priority === 'HIGH'))
   }
 
-  return tasks.value
+  return sortDoneTasksLast(tasks.value)
 })
 
 const getFilterCount = (filterId: FilterId) => {
